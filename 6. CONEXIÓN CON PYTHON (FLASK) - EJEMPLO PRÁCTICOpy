@@ -1,0 +1,106 @@
+# ============================================
+# 11. INTEGRACIÓN CON FLASK Y MONGODB
+# ============================================
+
+from flask import Flask, jsonify, request
+from flask_pymongo import PyMongo
+from bson import ObjectId
+from datetime import datetime
+import json
+
+app = Flask(__name__)
+app.config["MONGO_URI"] = "mongodb://localhost:27017/tejo_tournament_db"
+mongo = PyMongo(app)
+
+# Helper para serializar ObjectId
+class JSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, ObjectId):
+            return str(o)
+        if isinstance(o, datetime):
+            return o.isoformat()
+        return json.JSONEncoder.default(self, o)
+
+app.json_encoder = JSONEncoder
+
+# 11.1 Endpoint: Obtener torneos activos
+@app.route('/api/torneos/activos', methods=['GET'])
+def get_torneos_activos():
+    torneos = mongo.db.torneos.find(
+        {"estado": "activo"},
+        {"nombre": 1, "ubicacion": 1, "fecha_inicio": 1, "premio_total": 1}
+    ).sort("fecha_inicio", -1)
+    return jsonify(list(torneos))
+
+# 11.2 Endpoint: Ranking de equipos
+@app.route('/api/equipos/ranking', methods=['GET'])
+def get_ranking_equipos():
+    pipeline = [
+        {"$match": {"categoria": "profesional"}},
+        {"$sort": {"estadisticas.puntos_totales": -1}},
+        {"$project": {
+            "nombre": 1,
+            "ciudad": 1,
+            "puntos": "$estadisticas.puntos_totales",
+            "partidos": "$estadisticas.partidos_jugados"
+        }},
+        {"$limit": 10}
+    ]
+    resultados = mongo.db.equipos.aggregate(pipeline)
+    return jsonify(list(resultados))
+
+# 11.3 Endpoint: Estadísticas de jugador
+@app.route('/api/jugadores/<id>/estadisticas', methods=['GET'])
+def get_estadisticas_jugador(id):
+    jugador = mongo.db.jugadores.find_one(
+        {"_id": ObjectId(id)},
+        {"nombre": 1, "apellidos": 1, "estadisticas_carrera": 1}
+    )
+    if not jugador:
+        return jsonify({"error": "Jugador no encontrado"}), 404
+    return jsonify(jugador)
+
+# 11.4 Endpoint: Crear nuevo torneo
+@app.route('/api/torneos', methods=['POST'])
+def crear_torneo():
+    data = request.json
+    data['fecha_creacion'] = datetime.now()
+    resultado = mongo.db.torneos.insert_one(data)
+    return jsonify({
+        "mensaje": "Torneo creado exitosamente",
+        "id": str(resultado.inserted_id)
+    }), 201
+
+# 11.5 Endpoint: Buscar partidos por torneo
+@app.route('/api/torneos/<id>/partidos', methods=['GET'])
+def get_partidos_torneo(id):
+    partidos = mongo.db.partidos.find(
+        {"torneo_id": ObjectId(id)},
+        {"fase": 1, "equipo_local": 1, "equipo_visitante": 1, "fecha_programada": 1}
+    ).sort("fecha_programada", 1)
+    return jsonify(list(partidos))
+
+# 11.6 Endpoint: Reporte de torneo completo
+@app.route('/api/torneos/<id>/reporte', methods=['GET'])
+def get_reporte_torneo(id):
+    pipeline = [
+        {"$match": {"_id": ObjectId(id)}},
+        {"$lookup": {
+            "from": "partidos",
+            "localField": "_id",
+            "foreignField": "torneo_id",
+            "as": "partidos"
+        }},
+        {"$project": {
+            "nombre": 1,
+            "ubicacion": 1,
+            "total_partidos": {"$size": "$partidos"},
+            "fecha_inicio": 1,
+            "fecha_fin": 1
+        }}
+    ]
+    resultado = mongo.db.torneos.aggregate(pipeline)
+    return jsonify(list(resultado))
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
