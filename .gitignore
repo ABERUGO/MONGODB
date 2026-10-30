@@ -1,0 +1,8 @@
+*.zip
+*.pdf
+*.odt
+*.docx
+*.png
+node_modules/
+.env
+
